@@ -1,0 +1,78 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 29d600922110..221629a33331 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,12 @@
+ 
+  Docs: https://docs.openclaw.ai
+ 
++## Unreleased
++
++### Fixes
++
++- Agents/compaction: skip timeout-triggered compaction when the run was aborted by the user (Stop button). Previously, user-initiated aborts would still fire timeout compaction if context usage exceeded 65%, causing unnecessary compaction at an inappropriate time. Uses `externalAbort` (set only for user-initiated stops) rather than `aborted` (also set for internal timeouts) to correctly distinguish user aborts from provider timeouts.
++
+ ## 2026.5.9
+ 
+ ### Changes
+diff --git a/src/agents/pi-embedded-runner/run.timeout-triggered-compaction.test.ts b/src/agents/pi-embedded-runner/run.timeout-triggered-compaction.test.ts
+index 073e6adb65bc..976dbe1b3bbd 100644
+--- a/src/agents/pi-embedded-runner/run.timeout-triggered-compaction.test.ts
++++ b/src/agents/pi-embedded-runner/run.timeout-triggered-compaction.test.ts
+@@ -308,6 +308,7 @@ describe("timeout-triggered compaction", () => {
+       makeAttemptResult({
+         timedOut: true,
+         aborted: true,
++        externalAbort: false,
+         lastAssistant: {
+           usage: { input: 180000 },
+         } as never,
+@@ -329,6 +330,26 @@ describe("timeout-triggered compaction", () => {
+     expect(result.meta.error).toBeUndefined();
+   });
+ 
++  it("does not attempt compaction when user aborted (externalAbort=true)", async () => {
++    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
++      makeAttemptResult({
++        timedOut: true,
++        aborted: true,
++        externalAbort: true,
++        lastAssistant: {
++          usage: { input: 180000 },
++        } as never,
++      }),
++    );
++
++    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
++
++    // User-initiated abort should skip timeout compaction entirely
++    expect(mockedCompactDirect).not.toHaveBeenCalled();
++    expect(result.payloads?.[0]?.isError).toBe(true);
++    expect(result.payloads?.[0]?.text).toContain("timed out");
++  });
++
+   it("does not attempt compaction when timedOutDuringCompaction is true", async () => {
+     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+       makeAttemptResult({
+diff --git a/src/agents/pi-embedded-runner/run.ts b/src/agents/pi-embedded-runner/run.ts
+index 93cf14dbf8a4..ca64f7bea115 100644
+--- a/src/agents/pi-embedded-runner/run.ts
++++ b/src/agents/pi-embedded-runner/run.ts
+@@ -1447,7 +1447,7 @@ export async function runEmbeddedPiAgent(
+           // ── Timeout-triggered compaction ──────────────────────────────────
+           // When the LLM times out with high context usage, compact before
+           // retrying to break the death spiral of repeated timeouts.
+-          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
++          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution && !externalAbort) {
+             // Only consider prompt-side tokens here. API totals include output
+             // tokens, which can make a long generation look like high context
+             // pressure even when the prompt itself was small.
+@@ -2373,7 +2373,7 @@ export async function runEmbeddedPiAgent(
+             toolAudioAsVoice: attempt.toolAudioAsVoice,
+           });
+           const timedOutDuringPrompt =
+-            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
++            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution && !externalAbort;
+           const hasPartialAssistantTextAfterPromptTimeout =
+             timedOutDuringPrompt &&
+             (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
