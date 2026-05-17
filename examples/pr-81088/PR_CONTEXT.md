@@ -1,75 +1,64 @@
-# PR #81088 Verification Context
+# Example Verification Scenario — Adding a Guard Condition
+
+> This is an illustrative example showing how to use Lean 4 formal verification
+> on a real-world code change. The scenario is abstracted from an actual bug fix.
 
 ## Problem Being Fixed
 
-When a user presses the **Stop button** to abort a run:
-1. The run aborts → `externalAbort = true`
-2. If the LLM was mid-response, a timeout may also fire → `timedOut = true`
-3. If context usage > 65%, **timeout compaction fires unnecessarily**
-4. This wastes tokens and time on a run the user already cancelled
+A system has a mechanism that triggers a side effect (e.g., compaction, retry,
+cleanup) when a timeout occurs. However, there is a bug: when the **user
+cancels an operation**, the timeout-driven side effect still fires. The user's
+intent was to stop — triggering the side effect is wasteful and unexpected.
 
-The user's intent was to stop — compaction is pointless and wasteful.
+## The Fix (Abstract Pattern)
 
-## Design Intent
-
-**Distinguish between:**
-- **User-initiated abort** (Stop button) → `externalAbort = true` → **skip timeout compaction**
-- **Internal LLM timeout** (model took too long) → `externalAbort = false` → **compaction should still work**
-
-## Code Changes
-
-### File: `src/agents/pi-embedded-runner/run.ts`
-
-**Location 1** (around line ~1340, in the prompt timeout handling block):
-```ts
+```typescript
 // BEFORE:
-if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
-  // trigger timeout compaction if context > 65%
+if (timedOut && !alreadyCompacting && !executingTool) {
+    triggerSideEffect(); // side effect fires even on user cancel
 }
 
 // AFTER:
-if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution && !externalAbort) {
-  // trigger timeout compaction if context > 65%
+if (timedOut && !alreadyCompacting && !executingTool && !userAborted) {
+    triggerSideEffect(); // side effect skipped when user cancelled
 }
 ```
 
-**Location 2** (similar condition elsewhere in the same file):
-Same pattern — adds `&& !externalAbort` to the timeout compaction guard.
+The fix adds `&& !userAborted` to the guard condition. The key requirement:
+`userAborted` is `true` **only** when the user explicitly cancels, never during
+system-generated timeouts.
 
-### Variable Scope
-`externalAbort` is already destructured from `attempt` at **line 1283**:
-```ts
-const { ..., externalAbort, ... } = attempt;
-```
-So it's in scope at both modification points. No new variable needed.
+## What Needs Verification
 
-### Test Updates: `run.timeout-triggered-compaction.test.ts`
-- Internal timeout test: explicit `externalAbort: false` added
-- New test case: user abort scenario with `externalAbort: true` → verifies compaction is skipped
+1. **Correctness**: Does `&& !userAborted` correctly prevent the side effect on user cancel?
+2. **No regressions**: Does the side effect still fire for system-generated timeouts?
+3. **Exclusivity**: Is `userAborted` set to `true` exclusively for user actions?
+4. **Meaningfulness**: Is there a concrete scenario where the fix actually changes behavior?
 
-### CHANGELOG
-Updated with the fix description.
+## Formal Model (in Lean 4)
+
+The properties above are modeled as boolean variables:
+- `timedOut`: the timeout condition occurred
+- `compactDuring` / `executingTool`: other conditions that suppress the side effect
+- `userAborted`: the user explicitly cancelled
+
+See `FormalVerification.lean` for the complete proof (13 theorems).
 
 ## Expected Behavior After Fix
 
-| Scenario | `externalAbort` | `timedOut` | Compaction fires? |
+| Scenario | `userAborted` | `timedOut` | Side effect? |
 |---|---|---|---|
-| User presses Stop | `true` | may be `true` | **No** (skipped) ✅ |
-| Internal LLM timeout | `false` | `true` | **Yes** (preserved) ✅ |
+| User cancels (no timeout) | `true` | `false` | No (fails on `timedOut`) |
+| User cancels during timeout | `true` | `true` | **No** (new guard) ✅ |
+| System timeout only | `false` | `true` | **Yes** (preserved) ✅ |
+| Normal completion | `false` | `false` | No (fails on `timedOut`) |
 
-## Verification Tasks
+## How to Use This Example
 
-Please verify:
-1. **Correctness**: Does `&& !externalAbort` correctly prevent timeout compaction on user abort?
-2. **No regressions**: Does internal timeout compaction still work (`externalAbort` is `false` in that case)?
-3. **Variable scope**: Is `externalAbort` available at both modification points?
-4. **Edge cases**: What if user presses Stop AND internal timeout fires simultaneously?
-5. **Other usages**: Are there other places where `timedOutDuringPrompt` is used that might be affected?
-6. **Test coverage**: Do the test changes adequately cover both scenarios?
-7. **Any unintended side effects** from this change?
-
-## Source Files to Check
-- `src/agents/pi-embedded-runner/run.ts` — main fix
-- `src/agents/pi-embedded-runner/run.timeout-triggered-compaction.test.ts` — test updates
-- `CHANGELOG.md` — changelog entry
-- `src/agents/pi-embedded-runner/attempt.ts` — where `externalAbort` is set (line ~2837-2849)
+1. Read the scenario above to understand the pattern being verified
+2. Study `FormalVerification.lean` to see the Lean 4 proofs
+3. Adapt the pattern to your own code changes:
+   - Identify the boolean conditions in your code
+   - Model them as Lean variables
+   - Express your properties as theorems
+   - Prove them using `simp`, `tauto`, `cases`, etc.
