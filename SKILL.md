@@ -5,243 +5,272 @@ description: >
   Use when: you need mathematical proof of code correctness, protocol verification,
   algorithm correctness, security property proofs, or any property that can be
   expressed as a logical theorem.
-  Triggers: "形式証明", "formal verification", "Lean証明", "mathematical proof",
-  "theorem proving", "Leanstral", "コード検証", "correctness proof"
+  Triggers: "formal proof", "formal verification", "Lean proof", "mathematical proof",
+  "theorem proving", "Leanstral", "code verification", "correctness proof"
 ---
 
 # Leanstral Formal Verification
 
-Lean 4 + Mathlib + Leanstralモデルを使った形式証明のスキル。コードの性質を数学的に証明する。
+A skill for formal verification using Lean 4 + Mathlib + the **Leanstral** model
+(`labs-leanstral-2603`) from Mistral AI to mathematically prove code properties.
 
-## いつ使うか
+> **🔑 Requires a Mistral API key.** Set via the OpenClaw gateway configuration.
+> The Leanstral model is available for **free** via Mistral's API as of 2026-05-17.
+> Get a key at: https://console.mistral.ai/api-keys
 
-**使う場面:**
-- コードの修正が意図した性質を満たすことの証明
-- セキュリティプロパティの形式的検証
-- アルゴリズムの正しさの証明
-- プロトコルの安全性検証
-- 複数の条件分岐が網羅的であることの証明
-- 「この変更は既存の動作を壊さない」ことの形式的保証
+## Prerequisites
 
-**使わない場面:**
-- 単なるユニットテストで十分な場合
-- 実行時の振る舞いを確認したい場合（実際に動かして確認）
-- 証明不可能な主観的性質（UX、デザイン等）
+Before using this skill, set up a Lean 4 project on the host:
 
-## 環境
+1. Install [elan](https://github.com/leanprover/elan) (Lean version manager)
+2. Create a Lean project: `lake new formal-verification`
+3. Add Mathlib as a dependency in `lakefile.lean`
+4. Run `lake build` once to build the Mathlib cache (~500MB, one-time cost)
+5. Create a `verify.sh` script in the project root (see below)
 
-### ホスト環境（コンパイル用）
+### verify.sh template
 
-| 項目 | 値 |
+```bash
+#!/bin/bash
+# verify.sh — compile and check a Lean 4 proof file
+# Usage: bash verify.sh /path/to/proof.lean
+set -e
+export PATH="$HOME/.elan/bin:$PATH"
+PROJECT_DIR="<your-lean-project-dir>"
+cp "$1" "$PROJECT_DIR/Proof.lean"
+cd "$PROJECT_DIR"
+lake build
+```
+
+## When to use
+
+**Use cases:**
+- Proving that a code fix satisfies the intended properties
+- Formal verification of security properties
+- Proving the correctness of algorithms
+- Verifying the safety of protocols
+- Proving that multiple conditional branches are exhaustive
+- Providing formal assurance that "this change does not break existing behavior"
+
+**Do not use:**
+- When simple unit tests are sufficient
+- When you want to check runtime behavior (test by actually running it)
+- For unprovable subjective properties (UX, design, etc.)
+
+## Environment
+
+### Host environment (for compilation)
+
+| Item | Value |
 |---|---|
-| Lean バージョン | 4.29.1 (`leanprover/lean4:v4.29.1`) |
-| Mathlib | `leanprover-community/mathlib4` v4.29.1 |
-| elan パス | `~/.elan/bin/` |
-| プロジェクト | `/tmp/lean-pr81088/` |
-| `.lake` サイズ | ~579MB（Mathlibキャッシュ含む） |
-| 検証スクリプト | `/tmp/lean-pr81088/verify.sh` |
+| Lean version | 4.x (latest stable via elan) |
+| Mathlib | `leanprover-community/mathlib4` |
+| elan path | `~/.elan/bin/` |
+| Project directory | `<your-lean-project-dir>` |
+| `.lake` size | ~500MB (one-time Mathlib cache) |
+| Verification script | `<your-lean-project-dir>/verify.sh` |
 
-### サブエージェント
+### Sub-agent configuration
 
-| 項目 | 値 |
+Configure a sub-agent in your OpenClaw gateway with:
+
+| Setting | Recommendation |
 |---|---|
-| エージェントID | `free-leanstral-code-verifier-agentic` |
-| モデル | `labs-leanstral-2603` (Mistral) |
-| フォールバック | `MiniMax-M2.7`, `MiniMax-M2.5`, `mimo-v2.5-pro` |
+| Model | `labs-leanstral-2603` (Mistral) |
+| Fallback models | Any capable reasoning models (e.g., Claude, GPT, DeepSeek) |
+| Agent ID | `<your-leanstral-agent-id>` — any name you choose |
 
-### サンドボックス
+> The Leanstral model is specialized for Lean 4 theorem proving but can be prone to
+> timeouts. Configuring multiple fallback models ensures the task completes even if
+> the primary model is slow.
 
-| 項目 | 値 |
-|---|---|
-| イメージ | `openclaw-sandbox:bookworm-slim` |
-| 再ビルド方法 | `docker build -t openclaw-sandbox:bookworm-slim /tmp/sandbox-build/` |
-
-## 検証スクリプトの使い方
+## How to use the verification script
 
 ```bash
 export PATH="$HOME/.elan/bin:$PATH"
-bash /tmp/lean-pr81088/verify.sh /path/to/your-file.lean
+bash <lean-project-dir>/verify.sh /path/to/your-file.lean
 ```
 
-スクリプトの動作:
-1. 指定された `.lean` ファイルを `/tmp/lean-pr81088/PR81088/PR81088.lean` にコピー
-2. `lake build` を実行
-3. 成功時: `Build completed successfully (N jobs).`
-4. 失敗時: エラーメッセージ（行番号 + 内容）が出力される
+Script behavior:
+1. Copies the specified `.lean` file into the Lean project
+2. Runs `lake build`
+3. Success: `Build completed successfully (N jobs).`
+4. Failure: Error message (line number + content) is output
 
-## 検証フロー
+## Verification flow
 
-### ステップ1: 検証対象の性質を特定する
+### Step 1: Identify the properties to be verified
 
-証明したい性質を自然文で明確にする:
-- 「ユーザーがStopを押したとき、コンパクションは発生しない」
-- 「内部タイムアウト時は、コンパクションが従来通り発生する」
-- 「externalAbortがtrueになるのは、ユーザーのStop操作のみ」
+Clearly state the properties to be proven in natural language. For example, when
+verifying a code change that adds a new boolean flag `externalAbort` to prevent
+compaction during user-initiated aborts:
 
-### ステップ2: 形式モデルを構築する
+- "When the user triggers an abort, compaction does not occur."
+- "During an internal timeout, compaction occurs as before (unchanged)."
+- "The flag only becomes true on user-initiated operations."
 
-自然文の性質をLean 4の型・定理に変換する:
+### Step 2: Build a formal model
+
+Convert the natural language properties into Lean 4 types and theorems:
 
 ```lean
--- 変数定義（ブールフラグをモデル化）
-variable (T C E A : Bool)
--- T = timedOut, C = timedOutDuringCompaction, E = timedOutDuringToolExecution, A = externalAbort
+-- Model the relevant boolean conditions as variables
+variable (timedOut compactDuring timeExecuting userAborted : Bool)
 
--- 変更前の条件
-def compactionTriggerOld : Bool := T && !C && !E
+-- Condition BEFORE the change
+def triggerOld : Bool := timedOut && !compactDuring && !timeExecuting
 
--- 変更後の条件
-def compactionTriggerNew : Bool := T && !C && !E && !A
+-- Condition AFTER the change (adds userAborted check)
+def triggerNew : Bool := timedOut && !compactDuring && !timeExecuting && !userAborted
 ```
 
-### ステップ3: 定理を記述する
+### Step 3: Write the theorems
 
-各性質に対応する定理を書く:
+Write theorems corresponding to each property:
 
 ```lean
--- 定理1: ユーザーAbort時は常にコンパクションを防止
-theorem compaction_user_abort_prevents (hA : A = true) :
-    compactionTriggerNew T C E A = false := by
-  simp [compactionTriggerNew, hA]
+-- Property 1: User abort always prevents the condition
+theorem user_abort_prevents (h : userAborted = true) :
+    triggerNew timedOut compactDuring timeExecuting userAborted = false := by
+  simp [triggerNew, h]
 
--- 定理2: 内部タイムアウトは従来通り
-theorem compaction_internal_preserved (hA : A = false) :
-    compactionTriggerNew T C E A = compactionTriggerOld T C E := by
-  simp [compactionTriggerNew, compactionTriggerOld, hA]
+-- Property 2: Internal timeout behavior is unchanged
+theorem internal_timeout_unchanged (h : userAborted = false) :
+    triggerNew timedOut compactDuring timeExecuting userAborted =
+    triggerOld timedOut compactDuring timeExecuting := by
+  simp [triggerNew, triggerOld, h]
 
--- 定理3: 修正に意味がある（old=true, new=false となるケースが存在）
-theorem compaction_fix_matters :
-    compactionTriggerOld true false false = true ∧
-    compactionTriggerNew true false false true = false := by
-  simp [compactionTriggerOld, compactionTriggerNew]
+-- Property 3: The change is meaningful (there is a case where it matters)
+theorem change_is_meaningful :
+    triggerOld true false false = true ∧
+    triggerNew true false false true = false := by
+  simp [triggerOld, triggerNew]
 ```
 
-### ステップ4: コンパイル・検証
+### Step 4: Compile and verify
 
 ```bash
-bash /tmp/lean-pr81088/verify.sh /path/to/FormalVerification.lean
+bash <lean-project-dir>/verify.sh /path/to/FormalVerification.lean
 ```
 
-- **成功**: `Build completed successfully` → 証明完了
-- **失敗**: エラーメッセージを読んで修正 → 再コンパイル
+- **Success**: `Build completed successfully` → Proof completed
+- **Failure**: Read the error message and fix it → Recompile
 
-### ステップ5: 結果を報告する
+### Step 5: Report the results
 
-- 証明された定理の一覧
-- コンパイル出力（成功メッセージ）
-- 各定理が現実のどの性質に対応するか
+- List of proven theorems
+- Compilation output (success message)
+- Which real-world properties each theorem corresponds to
 
-## サブエージェントへの委任
+## Delegation to sub-agent
 
-メインエージェントがLeanコードを書く必要はない。Leanstralサブエージェントに委任する:
+The main agent does not need to write Lean code. Delegate to the Leanstral sub-agent:
 
 ```
 sessions_spawn:
-  agentId: free-leanstral-code-verifier-agentic
+  agentId: <your-leanstral-agent-id>
   task: |
     You are a Lean 4 formal verification expert.
 
     ## Context
-    [検証対象の説明、PRの内容、変更箇所]
+    [Description of the verification target, the code change, and the
+     properties that need to be proven]
 
     ## Environment
     Lean 4 is available on the HOST. To compile:
     ```bash
     export PATH="$HOME/.elan/bin:$PATH"
-    bash /tmp/lean-pr81088/verify.sh /workspace/your-file.lean
+    bash <lean-project-dir>/verify.sh /workspace/your-file.lean
     ```
 
     ## Task
-    1. 検証対象の性質を特定
-    2. Lean 4の形式モデルを構築
-    3. 定理を記述・証明
-    4. verify.shでコンパイル検証（必須）
-    5. 失敗したらエラー修正→再コンパイル
-    6. 最終的なコンパイル出力を報告
+    1. Identify the properties to be verified
+    2. Build a formal model in Lean 4
+    3. Write and prove theorems
+    4. Verify compilation using verify.sh (mandatory)
+    5. If it fails, fix the error and recompile
+    6. Report the final compilation output
 
     Save to: /workspace/FormalVerification.lean
 ```
 
-## 重要な注意点
+## Important notes
 
-### Dockerは使わない
+### Host vs Sandbox
 
-`.lake` ディレクトリが579MBあり、Dockerイメージ化は非現実的。ホストの `elan` を直接使用する。
+Lean must run on the **host**, not in the sub-agent's sandbox. The Mathlib
+dependency tree is large (~500MB `.lake/`) and impractical to containerize.
+Use `verify.sh` on the host; the sub-agent writes `.lean` files to `/workspace/`.
 
-### サブエージェントのsandbox
+### Sub-agent sandbox
 
-サブエージェントはsandbox内で実行される。Leanコンパイラはsandboxにインストールされていないため、ホストの `verify.sh` を使う。ファイルは `/workspace/` に保存し、`verify.sh` がプロジェクト内にコピーする。
+The sub-agent runs in a sandbox. The Lean compiler is not installed there, so
+compile via the host's `verify.sh`. Files are saved in `/workspace/`, and
+`verify.sh` copies them into the Lean project.
 
-### タイムアウト対策
+### Timeout countermeasures
 
-Leanstralモデルはタイムアウトしやすい。以下の対策:
-- タスクを明確に分割する（1つのファイルに集中）
-- 証明すべき定理を事前に列挙しておく
-- コンテキストファイルを事前に読んでおく（diff, PR_REVIEW, source code）
-- フォールバックモデルが複数設定されている
+The Leanstral model is prone to timeouts. Countermeasures:
+- Clearly divide tasks (focus on one file)
+- List the theorems to be proven in advance
+- Read context files in advance (diffs, review notes, source code)
+- Configure multiple fallback models
 
-## 他の分野への応用
+## Applications in other fields
 
-### コード検証以外での使用例
+### Use cases beyond code verification
 
-| 分野 | 例 |
+| Field | Example |
 |---|---|
-| **アルゴリズム** | ソートアルゴリズムの正しさ、計算量の証明 |
-| **セキュリティ** | 認証プロトコルの安全性、アクセス制御の性質 |
-| **ビジネスロジック** | 料金計算の整合性、割引ルールの網羅性 |
-| **データ整合性** | DB制約の充足、マイグレーションの安全性 |
-| **プロトコル** | 状態遷移のデッドロックフリー、メッセージ順序 |
-| **数学** | 統計計算の正しさ、数式変形の等価性 |
+| **Algorithms** | Correctness of sorting algorithms, proof of computational complexity |
+| **Security** | Safety of authentication protocols, properties of access control |
+| **Business logic** | Consistency of fee calculations, comprehensiveness of discount rules |
+| **Data integrity** | Satisfaction of DB constraints, safety of migrations |
+| **Protocols** | Deadlock-free state transitions, message ordering |
+| **Mathematics** | Correctness of statistical calculations, equivalence of formula transformations |
 
-### 応用の手順
+### Application procedure
 
-1. **検証対象の性質を自然文で定義** — 「Xの場合、必ずYが成り立つ」
-2. **形式モデルを構築** — 変数・型・関数で対象をモデル化
-3. **定理を記述** — 性質を `theorem` で表現
-4. **証明** — `by` ブロックで証明を書く（`simp`, `tauto`, `cases`, `rw` 等）
-5. **コンパイル検証** — `lake build` でLeanが証明をチェック
+1. **Define the properties to be verified in natural language** — "If X, then Y must always hold"
+2. **Build a formal model** — Model the subject using variables, types, and functions
+3. **Write theorems** — Express properties using `theorem`
+4. **Prove** — Write proofs in `by` blocks (`simp`, `tauto`, `cases`, `rw`, etc.)
+5. **Compile and verify** — Lean checks the proof using `lake build`
 
-### 証明タクティクスの基本
+### Basic proof tactics
 
-| タクティクス | 用途 |
+| Tactic | Use |
 |---|---|
-| `simp` | 定義を展開して簡約 |
-| `tauto` | 命題論理の自動証明 |
-| `rw [h]` | 仮定 `h` で書き換え |
-| `cases` | 場合分け |
-| `intro h` | 含意の導入 |
-| `rfl` | 自明な等式 |
-| `constructor` | 連言の分割 |
+| `simp` | Expand definitions and simplify |
+| `tauto` | Automatic proof of propositional logic |
+| `rw [h]` | Rewrite using assumption `h` |
+| `cases` | Case analysis |
+| `intro h` | Introduce implication |
+| `rfl` | Trivial equality |
+| `constructor` | Split a conjunction |
 
-## エラーハンドリング
+## Error handling
 
-### コンパイルエラー
+### Compilation errors
 
 ```
 error: unknown identifier 'foo'
 ```
-→ 定義が存在しない。`def` で定義するか、`import` を追加。
+→ The definition does not exist. Define it with `def` or add an `import`.
 
 ```
 error: type mismatch
 ```
-→ 型の不一致。変数の型宣言を確認。
+→ Type mismatch. Check the variable type declaration.
 
 ```
 error: tactic 'simp' failed
 ```
-→ `simp` で証明できない。より具体的なタクティクス（`cases`, `rw`）を使用。
+→ `simp` cannot prove it. Use more specific tactics (`cases`, `rw`).
 
-### サブエージェントタイムアウト
+### Sub-agent timeout
 
-Leanstralがタイムアウトした場合:
-1. 同じタスクを再spawn（モデルフォールバックが自動で切り替わる）
-2. タスクを小さく分割する
-3. 証明すべき定理を減らして段階的に進める
-
-## 参照ファイル
-
-- 実例: `/tmp/lean-pr81088/PR81088/FormalVerification.lean`（PR #81088の13定理）
-- 検証レポート: `projects/pr-81088-verification/VERIFICATION_REPORT.md`
-- PR diff: `subagents/free-leanstral-code-verifier-agentic/pr-81088.diff`
-- PRレビュー: `projects/pr-81088-verification/PR_REVIEW.md`
+If Leanstral times out:
+1. Respawn the same task (model fallback switches automatically)
+2. Divide the task into smaller parts
+3. Reduce the number of theorems to prove and proceed step by step
