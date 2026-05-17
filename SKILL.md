@@ -7,6 +7,7 @@ description: >
   expressed as a logical theorem.
   Triggers: "formal proof", "formal verification", "Lean proof", "mathematical proof",
   "theorem proving", "Leanstral", "code verification", "correctness proof"
+metadata: {"openclaw": {"requires": {"bins": ["lake"]}}}
 ---
 
 # Leanstral Formal Verification
@@ -14,9 +15,13 @@ description: >
 A skill for formal verification using Lean 4 + Mathlib + the **Leanstral** model
 (`labs-leanstral-2603`) from Mistral AI to mathematically prove code properties.
 
-> **🔑 Requires a Mistral API key.** Set via the OpenClaw gateway configuration.
+> **🔑 Requires a Mistral API key.**
 > The Leanstral model is available for **free** via Mistral's API as of 2026-05-17.
 > Get a key at: https://console.mistral.ai/api-keys
+>
+> ```bash
+> export MISTRAL_API_KEY="your-key-here"
+> ```
 
 ## About the Model
 
@@ -32,6 +37,7 @@ mechanically. When a proof passes, correctness is a mathematical fact, not a pro
 | Context length | 256K tokens |
 | License | Apache 2.0 (open weights) |
 | API model ID | `labs-leanstral-2603` |
+| API base URL | `https://api.mistral.ai/v1` |
 
 ### Why Leanstral beats general-purpose LLMs at proofs
 
@@ -53,28 +59,74 @@ all inputs**. When Lean 4 accepts the proof, correctness is guaranteed mathemati
 
 **Pass@16 beats Sonnet at 1/2 the cost, approaches Opus at 1/6 the cost.**
 
-## Recommended Parameters
+## Quick Start — Direct API Call
 
-When configuring the Leanstral sub-agent in OpenClaw:
+The primary way to use this skill: call the Mistral API directly.
+
+```bash
+curl -X POST "https://api.mistral.ai/v1/chat/completions" \
+  -H "Authorization: Bearer $MISTRAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "labs-leanstral-2603",
+    "temperature": 1.0,
+    "max_tokens": 32000,
+    "messages": [{
+      "role": "user",
+      "content": "Prove the following theorem in Lean 4:\n\ntheorem add_comm (a b : Nat) : a + b = b + a := by\n  sorry"
+    }]
+  }'
+```
+
+Or with Python:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="***",
+    base_url="https://api.mistral.ai/v1"
+)
+
+response = client.chat.completions.create(
+    model="labs-leanstral-2603",
+    temperature=1.0,
+    max_tokens=32000,
+    messages=[{"role": "user", "content": "Prove that..."}],
+)
+print(response.choices[0].message.content)
+```
+
+## Recommended API Parameters
 
 | Parameter | Recommended | Why |
 |---|---|---|
 | `temperature` | **1.0** | Diverse proof strategies. Lower values produce repetitive attempts. |
 | `max_tokens` | **32000** | Proofs are verbose. Generous output budget avoids truncation. |
-| `thinking` / `reasoning_effort` | **high** | Required for non-trivial proofs. Drop to `medium` only for simple boolean logic. |
-| Context limit | ≤ 200K tokens | Model supports 256K, but 200K is safer. |
-| `timeoutSeconds` | **600–1200** | Proof generation + compilation can take minutes. |
+| `reasoning_effort` | **"high"** (Mistral-specific) | Required for non-trivial proofs. Drop to `"medium"` only for simple boolean logic. |
 
 ### Pass@N Strategy
 
 Leanstral improves significantly with multiple attempts. If a proof fails on the
-first try, re-run the task — the model explores different proof strategies each
-time. **pass@2 adds +4.4 points to the score.** Configure fallback models in
-OpenClaw to automatically retry with different reasoning paths.
+first try, call the API again — the model explores different proof strategies each
+time. **pass@2 adds +4.4 points to the score.** For automated workflows, loop
+with retry logic:
+
+```bash
+for i in 1 2 3; do
+  curl -s -X POST "https://api.mistral.ai/v1/chat/completions" \
+    -H "Authorization: Bearer $MISTRAL_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"labs-leanstral-2603\",\"temperature\":1.0,\"max_tokens\":32000,\"messages\":[{\"role\":\"user\",\"content\":\"$(cat proof_request.txt | jq -Rs .)\"}]}" \
+    | jq -r '.choices[0].message.content' > proof_attempt_$i.lean
+  # Verify with Lean 4
+  bash verify.sh proof_attempt_$i.lean && break
+done
+```
 
 ## Prerequisites
 
-Before using this skill, set up a Lean 4 project on the host:
+Before using this skill, set up a Lean 4 project on your machine:
 
 1. Install [elan](https://github.com/leanprover/elan) (Lean version manager)
 2. Create a Lean project: `lake new formal-verification`
@@ -118,23 +170,23 @@ lake build
 ### Pattern 1: Verify an existing code fix
 ```
 1. Write the code + specification in Lean 4
-2. Ask Leanstral: "Prove this implementation satisfies the specification"
-3. Lean 4 verifies the proof
+2. Call Leanstral API: "Prove this implementation satisfies the specification"
+3. Compile the returned proof with verify.sh
 4. Pass → correctness guaranteed. Fail → failure point is the bug location.
 ```
 
 ### Pattern 2: Spec-driven development
 ```
 1. Write the specification in Lean 4 first (what "correct" means)
-2. Ask Leanstral to generate both implementation AND proof
-3. When the proof passes → development complete. No tests needed.
+2. Call Leanstral to generate both implementation AND proof
+3. Compile — when the proof passes, development is complete. No tests needed.
 ```
 
 ### Pattern 3: Root-cause a bug
 ```
 1. Observe the bug's symptoms
 2. Write the "correct behavior" specification in Lean 4
-3. Attempt to prove the current implementation satisfies it
+3. Call Leanstral to prove the current implementation satisfies it
 4. The point where the proof fails = the bug's root cause
 5. Fix, then re-prove to confirm
 ```
@@ -143,7 +195,7 @@ lake build
 ```
 1. Write the pre- and post-refactoring code
 2. Define equivalence as a specification
-3. Ask Leanstral to prove they are equivalent
+3. Call Leanstral to prove they are equivalent
 4. Proof passes → refactoring is mathematically safe
 ```
 
@@ -151,42 +203,11 @@ lake build
 ```
 1. Model the state machine as an inductive proposition in Lean 4
 2. Formulate properties: "no deadlocks", "no unreachable states", etc.
-3. Ask Leanstral to prove them
+3. Call Leanstral to prove them
 → Catches concurrency bugs exhaustively, not probabilistically
 ```
 
-## Environment
-
-### Host environment (for compilation)
-
-| Item | Value |
-|---|---|
-| Lean version | 4.x (latest stable via elan) |
-| Mathlib | `leanprover-community/mathlib4` |
-| elan path | `~/.elan/bin/` |
-| Project directory | `<your-lean-project-dir>` |
-| `.lake` size | ~500MB (one-time Mathlib cache) |
-| Verification script | `<your-lean-project-dir>/verify.sh` |
-
-### Sub-agent configuration
-
-Configure a sub-agent in your OpenClaw gateway with:
-
-| Setting | Recommended |
-|---|---|
-| Model | `labs-leanstral-2603` (Mistral) |
-| Temperature | 1.0 |
-| Max tokens | 32000 |
-| Thinking / reasoning | high |
-| Timeout | 600–1200 seconds |
-| Fallback models | Any capable reasoning models (Claude, GPT, DeepSeek) |
-| Agent ID | `<your-leanstral-agent-id>` — any name you choose |
-
-> The Leanstral model is specialized for Lean 4 theorem proving but can be prone to
-> timeouts. With `temperature=1.0` and multiple fallback models, the pass@N strategy
-> significantly increases the chance of a successful proof.
-
-## Verification flow
+## Verification Flow
 
 ### Step 1: Identify the properties to be verified
 
@@ -212,37 +233,29 @@ def triggerOld : Bool := timedOut && !compactDuring && !timeExecuting
 def triggerNew : Bool := timedOut && !compactDuring && !timeExecuting && !userAborted
 ```
 
-### Step 3: Write the theorems
+### Step 3: Call Leanstral to generate proofs
 
-Write theorems corresponding to each property:
+Send the model + theorems to the Leanstral API with a prompt like:
 
-```lean
--- Property 1: User abort always prevents the condition
-theorem user_abort_prevents (h : userAborted = true) :
-    triggerNew timedOut compactDuring timeExecuting userAborted = false := by
-  simp [triggerNew, h]
+```
+Prove the following theorems in Lean 4 using Mathlib.
+Use only the tactics: simp, tauto, rw, cases, rfl, constructor.
 
--- Property 2: System timeout behavior is unchanged
-theorem internal_timeout_unchanged (h : userAborted = false) :
-    triggerNew timedOut compactDuring timeExecuting userAborted =
-    triggerOld timedOut compactDuring timeExecuting := by
-  simp [triggerNew, triggerOld, h]
-
--- Property 3: The change is meaningful (witness where old=true, new=false)
-theorem change_is_meaningful :
-    triggerOld true false false = true ∧
-    triggerNew true false false true = false := by
-  simp [triggerOld, triggerNew]
+[paste your model + theorems here]
 ```
 
-### Step 4: Compile and verify
+### Step 4: Save output and compile
 
 ```bash
-bash <lean-project-dir>/verify.sh /path/to/FormalVerification.lean
+# Save Leanstral's response to a .lean file
+echo "$LEANSTRAL_OUTPUT" > FormalVerification.lean
+
+# Compile and verify
+bash <lean-project-dir>/verify.sh FormalVerification.lean
 ```
 
 - **Success**: `Build completed successfully` → Proof completed
-- **Failure**: Read the error message → Give the error back to Leanstral → Recompile
+- **Failure**: Read the error message → Send the error back to Leanstral → Retry
 
 ### Step 5: Report the results
 
@@ -250,41 +263,9 @@ bash <lean-project-dir>/verify.sh /path/to/FormalVerification.lean
 - Compilation output (success message)
 - Which real-world properties each theorem corresponds to
 
-## Delegation to sub-agent
-
-The main agent does not need to write Lean code. Delegate to the Leanstral sub-agent:
-
-```
-sessions_spawn:
-  agentId: <your-leanstral-agent-id>
-  task: |
-    You are a Lean 4 formal verification expert.
-
-    ## Context
-    [Description of the verification target, the code change, and the
-     properties that need to be proven]
-
-    ## Environment
-    Lean 4 is available on the HOST. To compile:
-    ```bash
-    export PATH="$HOME/.elan/bin:$PATH"
-    bash <lean-project-dir>/verify.sh /workspace/your-file.lean
-    ```
-
-    ## Task
-    1. Identify the properties to be verified
-    2. Build a formal model in Lean 4
-    3. Write and prove theorems
-    4. Verify compilation using verify.sh (mandatory)
-    5. If it fails, read the error, fix the proof, and recompile
-    6. Report the final compilation output
-
-    Save to: /workspace/FormalVerification.lean
-```
-
 ## Prompt Strategy
 
-When instructing Leanstral, always provide:
+When instructing Leanstral via the API, always provide:
 
 ```
 [Context]
@@ -305,7 +286,7 @@ When instructing Leanstral, always provide:
 def sorted_correct (arr : Array Nat) : Prop :=
   ∀ i j, i < j → j < arr.size → arr[i]! ≤ arr[j]!
 
--- Ask Leanstral: "Prove that bubbleSort satisfies sorted_correct"
+-- Send to Leanstral: "Prove that bubbleSort satisfies sorted_correct"
 def bubbleSort (arr : Array Nat) : Array Nat := by
   sorry -- implementation
 
@@ -314,6 +295,50 @@ theorem bubbleSort_correct (arr : Array Nat) :
   sorry -- Leanstral generates this proof
 ```
 
+## Using as an OpenClaw Sub-Agent (Optional)
+
+If you have already configured a Leanstral sub-agent in your OpenClaw gateway
+(this is separate setup — see the gateway's agent configuration), you can
+delegate proof generation to it:
+
+```
+sessions_spawn:
+  agentId: <your-leanstral-agent-id>
+  task: |
+    You are a Lean 4 formal verification expert.
+
+    ## Context
+    [Description of the verification target and properties to prove]
+
+    ## Environment
+    Lean 4 is available on the HOST. To compile:
+    ```bash
+    export PATH="$HOME/.elan/bin:$PATH"
+    bash <lean-project-dir>/verify.sh /workspace/your-file.lean
+    ```
+
+    ## Task
+    1. Identify the properties to be verified
+    2. Build a formal model in Lean 4
+    3. Write and prove theorems
+    4. Verify compilation using verify.sh (mandatory)
+    5. If it fails, read the error, fix the proof, and recompile
+    6. Report the final compilation output
+
+    Save to: /workspace/FormalVerification.lean
+```
+
+Recommended sub-agent parameters (if configuring one):
+
+| Setting | Recommended |
+|---|---|
+| Model | `labs-leanstral-2603` (Mistral) |
+| Temperature | 1.0 |
+| Max tokens | 32000 |
+| Thinking / reasoning | high |
+| Timeout | 600–1200 seconds |
+| Fallback models | Any capable reasoning models |
+
 ## Best Practices
 
 ### ✅ DO
@@ -321,10 +346,10 @@ theorem bubbleSort_correct (arr : Array Nat) :
 1. **Write the specification first.** Define "correct" before implementing.
 2. **Prove in small steps.** Break large theorems into lemmas.
 3. **Set reasoning_effort="high".** Essential for non-trivial proofs.
-4. **Use pass@N.** If the first attempt fails, re-run — each attempt explores different strategies.
+4. **Use pass@N.** If the first API call fails, retry — each attempt explores different strategies.
 5. **Feed Lean errors back to Leanstral.** The error message tells exactly what failed.
 6. **Leverage Mathlib.** Use existing proven lemmas — don't re-prove everything from scratch.
-7. **Keep examples small and focused.** One property per verification task.
+7. **Keep proofs small and focused.** One property per verification task.
 
 ### ❌ DON'T
 
@@ -336,26 +361,18 @@ theorem bubbleSort_correct (arr : Array Nat) :
 
 ## Important Notes
 
-### Host vs Sandbox
+### Lean on the host
 
-Lean must run on the **host**, not in the sub-agent's sandbox. The Mathlib
-dependency tree is large (~500MB `.lake/`) and impractical to containerize.
-Use `verify.sh` on the host; the sub-agent writes `.lean` files to `/workspace/`.
+Lean 4 with Mathlib requires ~500MB of cached dependencies. Run it directly on
+your machine — containerizing it is impractical. The `verify.sh` script compiles
+`.lean` files using the host's Lean installation.
 
-### Sub-agent sandbox
+### Timeout management
 
-The sub-agent runs in a sandbox. The Lean compiler is not installed there, so
-compile via the host's `verify.sh`. Files are saved in `/workspace/`, and
-`verify.sh` copies them into the Lean project.
-
-### Timeout countermeasures
-
-The Leanstral model can time out on complex proofs. Countermeasures:
-- Clearly divide tasks (focus on one file, one property at a time)
-- List the theorems to be proven in advance
-- Read context files in advance (diffs, review notes, source code)
-- Configure multiple fallback models (pass@N effect)
-- Set generous timeout (600–1200s) for proof generation + compilation
+The Leanstral model can take minutes to generate proofs. Countermeasures:
+- Set generous API timeouts (600–1200s)
+- Use pass@N: retry with fresh API calls if the first proof fails
+- Divide complex proofs into smaller lemmas
 
 ## Applications in Other Fields
 
@@ -375,8 +392,8 @@ The Leanstral model can time out on complex proofs. Countermeasures:
 1. **Define the property in natural language** — "If X, then Y must always hold"
 2. **Build a formal model** — Variables, types, functions that model the system
 3. **Write theorems** — Express properties using `theorem`
-4. **Prove** — Write proofs in `by` blocks (`simp`, `tauto`, `cases`, `rw`, etc.)
-5. **Compile and verify** — Lean checks the proof using `lake build`
+4. **Call Leanstral API** — Send the model + theorems and request proofs
+5. **Compile and verify** — `lake build` checks the proofs
 
 ### Basic proof tactics
 
@@ -420,13 +437,20 @@ error: tactic 'simp' failed
 ```
 → `simp` cannot prove it. Use more specific tactics (`cases`, `rw`).
 
-### Sub-agent timeout
+### Pass@N retry loop
 
-If Leanstral times out:
-1. Re-spawn the same task — the model will try different strategies (pass@N)
-2. Model fallbacks configured in OpenClaw switch automatically
-3. Divide the task into smaller lemmas
-4. Reduce the number of theorems and proceed incrementally
+```bash
+# Basic retry loop: try up to 3 times, stop on first success
+for i in 1 2 3; do
+  echo "Attempt $i..."
+  curl -s ... | python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'])" > proof.lean
+  if bash verify.sh proof.lean 2>/dev/null; then
+    echo "✅ Proof verified on attempt $i"
+    break
+  fi
+  echo "❌ Attempt $i failed, retrying..."
+done
+```
 
 ## Reference Links
 
