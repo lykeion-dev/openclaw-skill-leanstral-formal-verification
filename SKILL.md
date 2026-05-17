@@ -7,7 +7,7 @@ description: >
   expressed as a logical theorem.
   Triggers: "formal proof", "formal verification", "Lean proof", "mathematical proof",
   "theorem proving", "Leanstral", "code verification", "correctness proof"
-metadata: {"openclaw": {"requires": {"bins": ["lake"]}}}
+metadata: {"openclaw": {"requires": {"bins": ["lake"], "env": ["MISTRAL_API_KEY"]}, "primaryEnv": "MISTRAL_API_KEY"}}
 ---
 
 # Leanstral Formal Verification
