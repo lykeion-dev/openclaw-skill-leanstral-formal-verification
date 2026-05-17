@@ -15,13 +15,21 @@ metadata: {"openclaw": {"requires": {"bins": ["lake"], "env": ["MISTRAL_API_KEY"
 A skill for formal verification using Lean 4 + Mathlib + the **Leanstral** model
 (`labs-leanstral-2603`) from Mistral AI to mathematically prove code properties.
 
-> **🔑 Requires a Mistral API key.**
+> **🔑 Requires a Mistral API key.** Set via `MISTRAL_API_KEY` environment variable.
 > The Leanstral model is available for **free** via Mistral's API as of 2026-05-17.
 > Get a key at: https://console.mistral.ai/api-keys
 >
 > ```bash
 > export MISTRAL_API_KEY="your-key-here"
 > ```
+>
+> **⚠️ When using this skill:**
+> - Theorem statements and code are sent to Mistral's API. Do not include
+>   confidential code, secrets, or proprietary protocol details in prompts.
+> - Generated `.lean` files are untrusted code — `verify.sh` rejects proof
+>   holes (`sorry`/`admit`) and compiles in an isolated project directory.
+> - Always review the generated theorem statements. Lean verifies that the
+>   proof is valid, not that the theorem matches your intent.
 
 ## About the Model
 
